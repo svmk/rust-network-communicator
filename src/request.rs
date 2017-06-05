@@ -6,11 +6,11 @@ use tokio_curl::Perform;
 use futures::Poll;
 use tokio_curl::PerformError;
 use curl::easy::WriteError;
-use std::sync::{Arc,Mutex};
+use std::sync::Arc;
 use futures::Async;
+use std::mem::swap as swap_variable;
 use super::Task;
 use super::Error;
-use std::cell::Cell;
 use std::error::Error as StdError;
 use std::sync::mpsc::SyncSender;
 
@@ -29,7 +29,7 @@ impl Response {
 
 #[derive(Clone)]
 pub struct RequestDownloader {
-	inner: Arc<Mutex<Cell<Option<Response>>>>,
+	inner: Option<Response>,
 	request: Arc<Perform>,
 	sender: SyncSender<RequestDownloaderResult>,
 }
@@ -41,12 +41,9 @@ impl Future for RequestDownloader {
     	let result = Arc::get_mut(&mut self.request).unwrap().poll();
     	match result {
     		Ok(Async::Ready(_)) => {
-    			let response = self.inner.lock().expect(
-					"Unable to lock mutex"
-				).replace(None).expect(
-					"Unable to get response"
-				);
-				self.sender.send(Ok(response)).expect("Unable to send response result");
+    			let mut response = None;
+				swap_variable(&mut response,&mut self.inner);
+				self.sender.send(Ok(response.unwrap())).expect("Unable to send response result");
     		},
     		Ok(Async::NotReady) => {},
     		Err(ref error) => {
@@ -68,25 +65,17 @@ pub type RequestDownloaderResult = Result<Response,Error>;
 
 impl RequestDownloader {
 	pub fn new(task:Task,session: &Session,result_tx: SyncSender<RequestDownloaderResult>) -> Result<RequestDownloader,CurlError> {
-		let inner = Arc::new(
-			Mutex::new(
-				Cell::new(
-					Some(
-						Response{
-							content: vec![],
-						}
-					)
-				)
-			)
+		let inner = Some(
+			Response{
+				content: vec![],
+			}
 		);
-		let curl_inner = inner.clone();
+		let mut curl_inner = inner.clone();
 		let download_content = task.download();
 		let mut curl_request = task.get_request();
 		if download_content {
 			let _ = curl_request.write_function(move |data| {
-				curl_inner.lock().expect(
-					"Unable to unwrap curl_inner"
-				).get_mut().as_mut().expect(
+				curl_inner.as_mut().expect(
 					"Unable to write recv data"
 				).write(data)
 			})?;
