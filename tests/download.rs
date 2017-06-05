@@ -26,7 +26,20 @@ pub fn test_drop_network_manager_2() {
 	let result_1 = manager.recv();
 	assert!(result_1.is_ok());
 	assert!(result_1.unwrap().is_ok());
-	manager.send(Task::get("https://rust-lang.org").unwrap()).expect("Unable to send request");
+	manager.send(Task::get("https://google.com").unwrap()).expect("Unable to send request");
+	let result_2 = manager.recv();
+	assert!(result_2.is_ok());
+	assert!(result_2.unwrap().is_ok());
+}
+
+#[test]
+pub fn test_drop_network_manager_3() {
+	let manager = network_manager();
+	manager.send(Task::get("https://github.com").unwrap()).expect("Unable to send request");
+	manager.send(Task::get("https://google.com").unwrap()).expect("Unable to send request");
+	let result_1 = manager.recv();
+	assert!(result_1.is_ok());
+	assert!(result_1.unwrap().is_ok());
 	let result_2 = manager.recv();
 	assert!(result_2.is_ok());
 	assert!(result_2.unwrap().is_ok());

@@ -3,7 +3,7 @@ use curl::Error as CurlError;
 
 pub struct Task {
 	download: bool,
-	request: Easy,
+	request: Option<Easy>,
 }
 
 impl Task {
@@ -14,18 +14,29 @@ impl Task {
 		Ok(
 			Task {
 				download: true,
-				request: request,
+				request: Some(request),
 			}
 		)
 	}
 	pub fn configure(mut self,configurator: &Fn(Easy) -> Result<Easy,CurlError>) -> Result<Task,CurlError>  {
-		self.request = configurator(self.request)?;
+		self.request = Some(configurator(self.request.unwrap())?);
 		return Ok(self);
 	}
 	pub fn get_request(self) -> Easy {
-		return self.request;
+		return self.request.unwrap();
 	}
 	pub fn download(&self) -> bool {
 		return self.download;
 	}
+}
+
+pub fn generate_terminate_task() -> Task {
+	Task {
+		download: false,
+		request: None,
+	}
+}
+
+pub fn is_terminate_task(task: &Task) -> bool {
+	return task.request.is_none();
 }
