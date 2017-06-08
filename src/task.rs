@@ -1,5 +1,6 @@
 use curl::easy::Easy;
 use curl::Error as CurlError;
+use std::mem::swap as swap_variable;
 
 pub struct Task {
 	download: bool,
@@ -22,8 +23,10 @@ impl Task {
 		self.request = Some(configurator(self.request.unwrap())?);
 		return Ok(self);
 	}
-	pub fn get_request(self) -> Easy {
-		return self.request.unwrap();
+	pub fn get_request(&mut self) -> Easy {
+		let mut request = None;
+		swap_variable(&mut self.request,&mut request);
+		return request.unwrap();
 	}
 	pub fn download(&self) -> bool {
 		return self.download;

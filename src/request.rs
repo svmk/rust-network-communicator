@@ -27,10 +27,9 @@ impl Response {
 	}
 }
 
-#[derive(Clone)]
 pub struct RequestDownloader {
 	inner: Option<Response>,
-	request: Arc<Perform>,
+	request: Perform,
 	sender: SyncSender<RequestDownloaderResult>,
 }
 
@@ -38,7 +37,7 @@ impl Future for RequestDownloader {
 	type Item = Easy;
     type Error = PerformError;
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-    	let result = Arc::get_mut(&mut self.request).unwrap().poll();
+    	let result = self.request.poll();
     	match result {
     		Ok(Async::Ready(_)) => {
     			let mut response = None;
@@ -64,7 +63,7 @@ impl Future for RequestDownloader {
 pub type RequestDownloaderResult = Result<Response,Error>;
 
 impl RequestDownloader {
-	pub fn new(task:Task,session: &Session,result_tx: SyncSender<RequestDownloaderResult>) -> Result<RequestDownloader,CurlError> {
+	pub fn new(mut task:Task,session: &Session,result_tx: SyncSender<RequestDownloaderResult>) -> Result<RequestDownloader,CurlError> {
 		let inner = Some(
 			Response{
 				content: vec![],
@@ -72,18 +71,10 @@ impl RequestDownloader {
 		);
 		let mut curl_inner = inner.clone();
 		let download_content = task.download();
-		let mut curl_request = task.get_request();
-		if download_content {
-			let _ = curl_request.write_function(move |data| {
-				curl_inner.as_mut().expect(
-					"Unable to write recv data"
-				).write(data)
-			})?;
-		}
 
 		let downloader = RequestDownloader {
 			inner: inner,
-			request: Arc::new(session.perform(curl_request)),
+			request: session.perform(task.get_request()),
 			sender: result_tx,
 		};
 		return Ok(downloader);
