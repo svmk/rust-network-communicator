@@ -72,30 +72,30 @@ impl Worker {
 
 /// Handle for working with network manager.
 #[derive(Debug)]
-pub struct NetworkManagerHandle {
-	task_rx: SyncSender<Task>,
-	result_tx: Receiver<RequestDownloaderResult>,
+pub struct NetworkManagerHandle<T: Send + 'static> {
+	task_rx: SyncSender<Task<T>>,
+	result_tx: Receiver<RequestDownloaderResult<T>>,
 	manager_handle: Option< JoinHandle<()> >,
 }
 
-impl NetworkManagerHandle {
+impl <T: Send + 'static>NetworkManagerHandle<T> {
 	/// Aynchronous sending task to network manager.
-	pub fn send(&self,task: Task) -> Result<(), SendError<Task>> {
+	pub fn send(&self,task: Task<T>) -> Result<(), SendError<Task<T>>> {
 		return self.task_rx.send(task);
 	}
 
 	/// Returns copy of task sender.
-	pub fn get_sender(&self) -> SyncSender<Task> {
+	pub fn get_sender(&self) -> SyncSender<Task<T>> {
 		return self.task_rx.clone();
 	}
 
 	/// Receives result with locking.
-	pub fn recv(&self) -> Result<RequestDownloaderResult, RecvError> {
+	pub fn recv(&self) -> Result<RequestDownloaderResult<T>, RecvError> {
 		return self.result_tx.recv();
 	}
 }
 
-impl Drop for NetworkManagerHandle {
+impl <T: Send + 'static>Drop for NetworkManagerHandle<T> {
 	/// When dropping we are waiting for termination of all threads.
 	fn drop(&mut self) {
 		self.task_rx.send(
@@ -112,12 +112,12 @@ impl Drop for NetworkManagerHandle {
 }
 
 /// Manager for processsing request.
-pub struct NetworkManager {
+pub struct NetworkManager<T: Send + 'static> {
 	remotes: Vec<Worker>,
-	result_tx: SyncSender<RequestDownloaderResult>,
+	result_tx: SyncSender<RequestDownloaderResult<T>>,
 }
 
-impl NetworkManager {
+impl <T: Send + 'static>NetworkManager<T> {
 
 	fn terminate_workers(&mut self) {
 		for worker in self.remotes.drain(..) {
@@ -127,9 +127,9 @@ impl NetworkManager {
 
 	/// Creates new network manager.
 	/// Produces threads that may panic when something is going wrong.
-	pub fn start(config: &Config) -> Result<NetworkManagerHandle,Error> {
+	pub fn start(config: &Config) -> Result<NetworkManagerHandle<T>,Error> {
 		let mut remotes = vec![];
-		let (result_tx,result_rx) = sync_channel::<RequestDownloaderResult>(config.get_limit_result_channel());
+		let (result_tx,result_rx) = sync_channel::<RequestDownloaderResult<T>>(config.get_limit_result_channel());
 		for _ in 0..config.get_thread_count() {
 			remotes.push(Worker::new());
 		}
@@ -137,7 +137,7 @@ impl NetworkManager {
 			remotes: remotes,
 			result_tx: result_tx.clone(),
 		};
-		let (tx,rx) = sync_channel::<Task>(config.get_limit_task_channel());
+		let (tx,rx) = sync_channel::<Task<T>>(config.get_limit_task_channel());
 		let thread_handle = ThreadBuilder::new().spawn(
 			move || {
 				for worker in manager.remotes.iter().cycle() {

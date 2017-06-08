@@ -1,45 +1,50 @@
 use curl::easy::Easy;
-use curl::Error as CurlError;
 use std::mem::swap as swap_variable;
 
-pub struct Task {
-	download: bool,
+/// Task for network manager.
+pub struct Task<T> {
+	data: Option<T>,
 	request: Option<Easy>,
 }
 
-impl Task {
-	pub fn get(url:&str) -> Result<Task,CurlError> {
-		let mut request = Easy::new();
-		let _ = request.get(true)?;
-		request.url(url)?;
+/// Function for request configuration.
+pub type TaskConfigurator<T,E> = Fn(&mut T,&mut Easy) -> Result<(),E>;
+
+impl <T>Task<T> {
+	/// Creates new task with payload
+	pub fn new<E>(payload: T,configurator: &TaskConfigurator<T,E>) -> Result<Task<T>,E> {
+		let mut task = Task {
+			request: Some(Easy::new()),
+			data: Some(payload),
+		};
+		task.configure(configurator)?;
 		Ok(
-			Task {
-				download: true,
-				request: Some(request),
-			}
+			task
 		)
 	}
-	pub fn configure(mut self,configurator: &Fn(Easy) -> Result<Easy,CurlError>) -> Result<Task,CurlError>  {
-		self.request = Some(configurator(self.request.unwrap())?);
-		return Ok(self);
-	}
-	pub fn get_request(&mut self) -> Easy {
-		let mut request = None;
-		swap_variable(&mut self.request,&mut request);
-		return request.unwrap();
-	}
-	pub fn download(&self) -> bool {
-		return self.download;
+	fn configure<E>(&mut self,configurator: &TaskConfigurator<T,E>) -> Result<(),E>  {
+		return configurator(self.data.as_mut().unwrap(),self.request.as_mut().unwrap());
 	}
 }
 
-pub fn generate_terminate_task() -> Task {
+pub fn get_request_from_task<T>(task: &mut Task<T>) -> Easy {
+	let mut request = None;
+	swap_variable(&mut task.request,&mut request);
+	return request.unwrap();
+}
+
+pub fn get_data_from_task<T>(task: &mut Task<T>) -> T {
+	let mut data = None;
+	swap_variable(&mut task.data,&mut data);
+	return data.unwrap();
+}
+pub fn generate_terminate_task<T>() -> Task<T> {
 	Task {
-		download: false,
 		request: None,
+		data: None,
 	}
 }
 
-pub fn is_terminate_task(task: &Task) -> bool {
+pub fn is_terminate_task<T>(task: &Task<T>) -> bool {
 	return task.request.is_none();
 }

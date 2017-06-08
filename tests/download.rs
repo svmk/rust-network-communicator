@@ -4,7 +4,19 @@ use network_communicator::NetworkManager;
 use network_communicator::Config;
 use network_communicator::Task;
 
-fn network_manager() -> NetworkManagerHandle {
+struct Payload {
+	input: Vec<u8>,
+}
+
+impl Payload {
+	fn new() -> Payload {
+		Payload {
+			input: vec![],
+		}
+	}
+}
+
+fn network_manager() -> NetworkManagerHandle<Payload> {
 	let mut config = Config::new(1).expect("Unable to create config");
 	config.set_limit_task_channel(10000).unwrap();
 	config.set_limit_result_channel(10000).unwrap();
@@ -12,21 +24,32 @@ fn network_manager() -> NetworkManagerHandle {
 	return manager;
 }
 
+fn get_request(url:&str) -> Task<Payload> {
+	Task::new::<()>(Payload::new(),&|payload,request|{
+		request.url(url).expect("Unable to configure request");
+		request.write_function(|data| {
+			payload.input.extend_from_slice(data);
+			Ok(data.len())
+		});
+		Ok(())
+	}).unwrap()
+}
+
 #[test]
 pub fn test_drop_network_manager_1() {
 	let manager = network_manager();
-	manager.send(Task::get("https://github.com").unwrap()).expect("Unable to send request");
-	manager.send(Task::get("https://rust-lang.org").unwrap()).expect("Unable to send request");
+	manager.send(get_request("https://github.com")).expect("Unable to send request");
+	manager.send(get_request("https://rust-lang.org")).expect("Unable to send request");
 }
 
 #[test]
 pub fn test_drop_network_manager_2() {
 	let manager = network_manager();
-	manager.send(Task::get("https://github.com").unwrap()).expect("Unable to send request");
+	manager.send(get_request("https://github.com")).expect("Unable to send request");
 	let result_1 = manager.recv();
 	assert!(result_1.is_ok());
 	assert!(result_1.unwrap().is_ok());
-	manager.send(Task::get("https://google.com").unwrap()).expect("Unable to send request");
+	manager.send(get_request("https://google.com")).expect("Unable to send request");
 	let result_2 = manager.recv();
 	assert!(result_2.is_ok());
 	assert!(result_2.unwrap().is_ok());
@@ -35,8 +58,8 @@ pub fn test_drop_network_manager_2() {
 #[test]
 pub fn test_drop_network_manager_3() {
 	let manager = network_manager();
-	manager.send(Task::get("https://github.com").unwrap()).expect("Unable to send request");
-	manager.send(Task::get("https://google.com").unwrap()).expect("Unable to send request");
+	manager.send(get_request("https://github.com")).expect("Unable to send request");
+	manager.send(get_request("https://google.com")).expect("Unable to send request");
 	let result_1 = manager.recv();
 	assert!(result_1.is_ok());
 	assert!(result_1.unwrap().is_ok());
