@@ -1,8 +1,10 @@
 extern crate network_communicator;
+extern crate curl;
 use network_communicator::NetworkManagerHandle;
 use network_communicator::NetworkManager;
 use network_communicator::Config;
 use network_communicator::Task;
+use curl::easy::Easy;
 
 struct Payload {
 	input: Vec<u8>,
@@ -25,14 +27,14 @@ fn network_manager() -> NetworkManagerHandle<Payload> {
 }
 
 fn get_request(url:&str) -> Task<Payload> {
-	Task::new::<()>(Payload::new(),&|payload,request|{
-		request.url(url).expect("Unable to configure request");
+	let url = String::from(url);
+	Task::new(Payload::new(),move |payload: &mut Payload,request: &mut Easy|{
+		request.url(&url).expect("Unable to configure request");
 		request.write_function(|data| {
 			payload.input.extend_from_slice(data);
 			Ok(data.len())
 		});
-		Ok(())
-	}).unwrap()
+	})
 }
 
 #[test]

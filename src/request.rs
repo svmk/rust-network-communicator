@@ -10,11 +10,12 @@ use super::Task;
 use super::Error;
 use std::error::Error as StdError;
 use std::sync::mpsc::SyncSender;
-use task::{get_data_from_task,get_request_from_task};
+use task::{disassemble_task};
+use std::mem::swap as swap_variable;
 
 
 pub struct RequestDownloader<T: Send + 'static> {
-	task: Option<Task<T>>,
+	payload: Option<T>,
 	request: Perform,
 	sender: SyncSender<RequestDownloaderResult<T>>,
 }
@@ -26,8 +27,9 @@ impl <T: Send + 'static>Future for RequestDownloader<T> {
     	let result = self.request.poll();
     	match result {
     		Ok(Async::Ready(_)) => {
-				let response = get_data_from_task(self.task.as_mut().unwrap());
-				self.sender.send(Ok(response)).expect("Unable to send response");
+    			let mut response = None;
+    			swap_variable(&mut self.payload, &mut response);
+				self.sender.send(Ok(response.unwrap())).expect("Unable to send response");
     		},
     		Ok(Async::NotReady) => {},
     		Err(ref error) => {
@@ -48,10 +50,11 @@ impl <T: Send + 'static>Future for RequestDownloader<T> {
 pub type RequestDownloaderResult<T> = Result<T,Error>;
 
 impl <T: Send + 'static>RequestDownloader<T> {
-	pub fn new(mut task:Task<T>,session: &Session,result_tx: SyncSender<RequestDownloaderResult<T>>) -> Result<RequestDownloader<T>,CurlError> {
+	pub fn new(task:Task<T>,session: &Session,result_tx: SyncSender<RequestDownloaderResult<T>>) -> Result<RequestDownloader<T>,CurlError> {
+		let (payload,request) = disassemble_task(task);
 		let downloader = RequestDownloader {
-			request: session.perform(get_request_from_task(&mut task)),
-			task: Some(task),
+			request: session.perform(request),
+			payload: Some(payload),
 			sender: result_tx,
 		};
 		return Ok(downloader);
