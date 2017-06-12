@@ -11,6 +11,7 @@ use std::sync::mpsc::{RecvError,SendError};
 use task::{is_terminate_task,generate_terminate_task};
 use std::ops::Drop;
 use std::mem::swap as swap_variables;
+use request_future::RequestFuture;
 use super::Task;
 use super::RequestDownloader;
 use super::RequestDownloaderResult;
@@ -72,30 +73,30 @@ impl Worker {
 
 /// Handle for working with network manager.
 #[derive(Debug)]
-pub struct NetworkManagerHandle<T: Send + 'static> {
-	task_rx: SyncSender<Task<T>>,
-	result_tx: Receiver<RequestDownloaderResult<T>>,
+pub struct NetworkManagerHandle<T: Send + 'static,E: Send + 'static> {
+	task_rx: SyncSender<Task<T,E>>,
+	result_tx: Receiver<RequestDownloaderResult<T,E>>,
 	manager_handle: Option< JoinHandle<()> >,
 }
 
-impl <T: Send + 'static>NetworkManagerHandle<T> {
+impl <T: Send + 'static,E: Send + 'static>NetworkManagerHandle<T,E> {
 	/// Aynchronous sending task to network manager.
-	pub fn send(&self,task: Task<T>) -> Result<(), SendError<Task<T>>> {
+	pub fn send(&self,task: Task<T,E>) -> Result<(), SendError<Task<T,E>>> {
 		return self.task_rx.send(task);
 	}
 
 	/// Returns copy of task sender.
-	pub fn get_sender(&self) -> SyncSender<Task<T>> {
+	pub fn get_sender(&self) -> SyncSender<Task<T,E>> {
 		return self.task_rx.clone();
 	}
 
 	/// Receives result with locking.
-	pub fn recv(&self) -> Result<RequestDownloaderResult<T>, RecvError> {
+	pub fn recv(&self) -> Result<RequestDownloaderResult<T,E>, RecvError> {
 		return self.result_tx.recv();
 	}
 }
 
-impl <T: Send + 'static>Drop for NetworkManagerHandle<T> {
+impl <T: Send + 'static,E: Send + 'static>Drop for NetworkManagerHandle<T,E> {
 	/// When dropping we are waiting for termination of all threads.
 	fn drop(&mut self) {
 		self.task_rx.send(
@@ -112,12 +113,12 @@ impl <T: Send + 'static>Drop for NetworkManagerHandle<T> {
 }
 
 /// Manager for processsing request.
-pub struct NetworkManager<T: Send + 'static> {
+pub struct NetworkManager<T: Send + 'static,E: Send + 'static> {
 	remotes: Vec<Worker>,
-	result_tx: SyncSender<RequestDownloaderResult<T>>,
+	result_tx: SyncSender<RequestDownloaderResult<T,E>>,
 }
 
-impl <T: Send + 'static>NetworkManager<T> {
+impl <T: Send + 'static,E: Send + 'static>NetworkManager<T,E> {
 
 	fn terminate_workers(&mut self) {
 		for worker in self.remotes.drain(..) {
@@ -127,9 +128,9 @@ impl <T: Send + 'static>NetworkManager<T> {
 
 	/// Creates new network manager.
 	/// Produces threads that may panic when something is going wrong.
-	pub fn start(config: &Config) -> Result<NetworkManagerHandle<T>,Error> {
+	pub fn start(config: &Config) -> Result<NetworkManagerHandle<T,E>,Error<E>> {
 		let mut remotes = vec![];
-		let (result_tx,result_rx) = sync_channel::<RequestDownloaderResult<T>>(config.get_limit_result_channel());
+		let (result_tx,result_rx) = sync_channel::<RequestDownloaderResult<T,E>>(config.get_limit_result_channel());
 		for _ in 0..config.get_thread_count() {
 			remotes.push(Worker::new());
 		}
@@ -137,7 +138,7 @@ impl <T: Send + 'static>NetworkManager<T> {
 			remotes: remotes,
 			result_tx: result_tx.clone(),
 		};
-		let (tx,rx) = sync_channel::<Task<T>>(config.get_limit_task_channel());
+		let (tx,rx) = sync_channel::<Task<T,E>>(config.get_limit_task_channel());
 		let thread_handle = ThreadBuilder::new().spawn(
 			move || {
 				for worker in manager.remotes.iter().cycle() {
@@ -145,19 +146,23 @@ impl <T: Send + 'static>NetworkManager<T> {
 					if is_terminate_task(&task) {
 						break;
 					}
-					let request_result = RequestDownloader::new(task,&*worker.session.lock().unwrap(),manager.result_tx.clone());
-					match request_result {
-						Ok(request) => {
-							worker.remote.spawn(move |_handle:&Handle|{
-								request.map(|_|{()}).map_err(|_|{()})
-							});
-						},
-						Err(request_error) => {
-							manager.result_tx.send(
-								Err(Error::Curl(request_error))
-							).expect("Unable to send result");
-						},
-					}
+					let manager_result_tx = manager.result_tx.clone();
+					let worker_session = worker.session.clone();
+					worker.remote.spawn(move |_handle:&Handle|{
+						let request_result = RequestDownloader::new(task,&*worker_session.lock().unwrap(),manager_result_tx.clone());
+						let result = match request_result {
+							Ok(request) => {
+								RequestFuture::Process(request)
+							},
+							Err(request_error) => {
+								manager_result_tx.send(
+									Err( request_error )
+								).expect("Unable to send result");
+								RequestFuture::Ready
+							},
+						};
+						return result.map(|_|{()}).map_err(|_|{()});
+					});
 				}
 				manager.terminate_workers();
 			}
@@ -171,7 +176,7 @@ impl <T: Send + 'static>NetworkManager<T> {
 				});
 			},
 			Err(thread_error) => {
-				return Err(Error::ThreadStartError(thread_error));
+				return Err(Error::ThreadStartError { error: thread_error });
 			}
 		}
 	}

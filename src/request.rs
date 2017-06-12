@@ -1,4 +1,3 @@
-use curl::Error as CurlError;
 use curl::easy::Easy;
 use futures::Future;
 use tokio_curl::Session;
@@ -14,13 +13,13 @@ use task::{disassemble_task};
 use std::mem::swap as swap_variable;
 
 
-pub struct RequestDownloader<T: Send + 'static> {
+pub struct RequestDownloader<T: Send + 'static,E: Send + 'static> {
 	payload: Option<T>,
 	request: Perform,
-	sender: SyncSender<RequestDownloaderResult<T>>,
+	sender: SyncSender<RequestDownloaderResult<T,E>>,
 }
 
-impl <T: Send + 'static>Future for RequestDownloader<T> {
+impl <T: Send + 'static,E: Send + 'static>Future for RequestDownloader<T,E> {
 	type Item = Easy;
     type Error = PerformError;
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
@@ -34,10 +33,10 @@ impl <T: Send + 'static>Future for RequestDownloader<T> {
     		Ok(Async::NotReady) => {},
     		Err(ref error) => {
     			self.sender.send(
-	    			Err(Error::EventLoop (
-	    				String::from(error.description()),
-	    				format!("{:?}",error)
-	    			))
+	    			Err(Error::EventLoop {
+	    				description: String::from(error.description()),
+	    				debug_message: format!("{:?}",error)
+	    			})
     			).expect("Unable to send response error");
     		}
     	}
@@ -47,11 +46,15 @@ impl <T: Send + 'static>Future for RequestDownloader<T> {
 
 
 /// Result of working network manager.
-pub type RequestDownloaderResult<T> = Result<T,Error>;
+pub type RequestDownloaderResult<T,E> = Result<T,Error<E>>;
 
-impl <T: Send + 'static>RequestDownloader<T> {
-	pub fn new(task:Task<T>,session: &Session,result_tx: SyncSender<RequestDownloaderResult<T>>) -> Result<RequestDownloader<T>,CurlError> {
-		let (payload,request) = disassemble_task(task);
+impl <T: Send + 'static,E: Send + 'static>RequestDownloader<T,E> {
+	pub fn new(task:Task<T,E>,session: &Session,result_tx: SyncSender<RequestDownloaderResult<T,E>>) -> Result<RequestDownloader<T,E>,Error<E>> {
+		let (mut payload,configurator) = disassemble_task(task);
+		let mut request = Easy::new();
+		if let Err(error) = configurator(&mut payload,&mut request) {
+			return Err(error);
+		}
 		let downloader = RequestDownloader {
 			request: session.perform(request),
 			payload: Some(payload),

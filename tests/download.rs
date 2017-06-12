@@ -4,21 +4,21 @@ use network_communicator::NetworkManagerHandle;
 use network_communicator::NetworkManager;
 use network_communicator::Config;
 use network_communicator::Task;
-use curl::easy::Easy;
+use std::sync::{Arc,Mutex};
 
 struct Payload {
-	input: Vec<u8>,
+	input: Arc<Mutex<Vec<u8>>>,
 }
 
 impl Payload {
 	fn new() -> Payload {
 		Payload {
-			input: vec![],
+			input: Arc::new(Mutex::new(vec![])),
 		}
 	}
 }
 
-fn network_manager() -> NetworkManagerHandle<Payload> {
+fn network_manager() -> NetworkManagerHandle<Payload,()> {
 	let mut config = Config::new(1).expect("Unable to create config");
 	config.set_limit_task_channel(10000).unwrap();
 	config.set_limit_result_channel(10000).unwrap();
@@ -26,14 +26,16 @@ fn network_manager() -> NetworkManagerHandle<Payload> {
 	return manager;
 }
 
-fn get_request(url:&str) -> Task<Payload> {
+fn get_request(url:&str) -> Task<Payload,()> {
 	let url = String::from(url);
-	Task::new(Payload::new(),move |payload: &mut Payload,request: &mut Easy|{
-		request.url(&url).expect("Unable to configure request");
-		request.write_function(|data| {
-			payload.input.extend_from_slice(data);
+	Task::new(Payload::new(),move |payload,request|{
+		let payload_input = payload.input.clone();
+		request.url(&url)?;
+		request.write_function(move |data| {
+			payload_input.lock().unwrap().extend_from_slice(data);
 			Ok(data.len())
-		});
+		})?;
+		Ok(())
 	})
 }
 
