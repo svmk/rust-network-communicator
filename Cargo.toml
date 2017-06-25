@@ -10,5 +10,5 @@ documentation = "http://svmk.github.io/rust-network-communicator/0.1.0/network_c
 tokio-curl="^0.1"
 tokio-core="^0.1"
 quick-error = "1.2"
-futures="*"
-curl="*"
+futures="0.1"
+curl="0.4"
