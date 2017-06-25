@@ -5,7 +5,7 @@ Network manager for download/upload content based on tokio-curl crate.
 [![Crates.io](https://img.shields.io/crates/v/rust-network-communicator.svg?maxAge=2592000)](https://crates.io/crates/rust-network-communicator)
 
 
-[Documentation](https://docs.rs/network-communicator)
+[Documentation](http://svmk.github.io/rust-network-communicator/0.1.0/network_communicator/index.html)
 [Example](tests/download.rs)
 
 

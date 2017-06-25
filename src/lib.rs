@@ -5,6 +5,7 @@
 //! # Example
 //! 
 
+//!```no_run
 //! extern crate network_communicator;
 //! extern crate curl;
 //! use network_communicator::NetworkManagerHandle;
@@ -49,7 +50,7 @@
 //! let manager = network_manager();
 //! manager.send(get_request("https://github.com")).expect("Unable to send request");
 //! manager.send(get_request("https://rust-lang.org")).expect("Unable to send request");
-
+//!```
 extern crate tokio_core;
 extern crate tokio_curl;
 extern crate futures;
