@@ -4,6 +4,7 @@ version = "0.1.0"
 authors = ["Mikhail Svetov <svmk-work@yandex.ru>"]
 description = "Network manager for download/upload content based on tokio-curl crate using HTTP protocol"
 license = "MIT"
+documentation = "http://svmk.github.io/rust-network-communicator/0.1.0/network_communicator/index.html"
 
 [dependencies]
 tokio-curl="^0.1"
