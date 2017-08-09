@@ -6,17 +6,12 @@ use std::convert::From;
 
 /// Errors during starting download manager or processing request.
 pub enum Error<E> {
-	/// Unable to start thread.
-	ThreadStartError { error: IOError },
+	/// IO Error
+	IOError { error: IOError },
 
 	/// Curl error - configuring or processing request.
 	/// First parameter - curl error.
 	Curl { error: CurlError },
-
-	/// Error within event-loop.
-	/// First parameter - description.
-	/// Second parameter - debug message.
-	EventLoop { description: String, debug_message: String },
 
 	/// User defined error while Initializing
 	Initialize { error: E },
@@ -26,14 +21,11 @@ impl <E> Debug for Error<E> {
 	#[allow(unused)]
 	fn fmt(&self, f: &mut Formatter) -> Result<(), FormatterError> {
 		match self {
-			&Error::ThreadStartError {ref error} => {
-				write!(f, "Unable to start thread: {:?}", error)
+			&Error::IOError {ref error} => {
+				write!(f, "IOError: {:?}", error)
 			},
 			&Error::Curl {ref error} => {
 				write!(f, "Curl error: {:?}", error)
-			},
-			&Error::EventLoop {ref description,ref debug_message} => {
-				write!(f, "Event loop error: {}", debug_message)
 			},
 			&Error::Initialize {..} => {
 				write!(f, "Initialize error")
@@ -52,14 +44,11 @@ impl <E>TraitError for Error<E> {
 	#[allow(unused)]
 	fn description(&self) -> &str {
 		match self {
-			&Error::ThreadStartError {..} => {
-				"Unable to start thread"
+			&Error::IOError {..} => {
+				"IOError"
 			},
 			&Error::Curl {..} => {
 				"Curl error"
-			},
-			&Error::EventLoop {ref description,ref debug_message} => {
-				&description
 			},
 			&Error::Initialize {..} => {
 				"Initialize error"
@@ -69,20 +58,25 @@ impl <E>TraitError for Error<E> {
 
     fn cause(&self) -> Option<&TraitError> {
     	match self {
-			&Error::ThreadStartError {ref error} => {
+			&Error::IOError {ref error} => {
 				Some(error)
 			},
 			&Error::Curl {ref error} => {
 				Some(error)
-			},
-			&Error::EventLoop {..} => {
-				None
 			},
 			&Error::Initialize {..} => {
 				None
 			},
 		}
     }
+}
+
+impl <E>From<IOError> for Error<E> {
+	fn from(error: IOError) -> Self {
+		Error::IOError {
+			error: error
+		}
+	}
 }
 
 

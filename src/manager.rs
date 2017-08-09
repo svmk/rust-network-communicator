@@ -1,183 +1,153 @@
-use tokio_core::reactor::{Core,Remote};
 use std::thread::Builder as ThreadBuilder;
 use std::thread::JoinHandle;
-use std::sync::{Arc,Mutex,RwLock};
-use tokio_curl::Session;
+use std::mem::swap as swap_variable;
+use std::sync::{Arc};
+use std::sync::atomic::AtomicUsize;
 use std::sync::mpsc::{sync_channel,SyncSender,Receiver};
-use tokio_core::reactor::Handle;
-use futures::Future;
-use futures::future;
 use std::sync::mpsc::{RecvError,SendError};
-use task::{is_terminate_task,generate_terminate_task};
+use std::sync::atomic::Ordering as AtomicOrdering;
 use std::ops::Drop;
-use std::mem::swap as swap_variables;
-use request_future::RequestFuture;
+#[allow(deprecated)]
+use mio::channel::channel;
+use event_loop::EventLoop;
+use curl::easy::Easy2;
+use config::get_event_loop_config;
+use task::{termination_task,is_terminate_task};
 use super::Task;
-use super::RequestDownloader;
-use super::RequestDownloaderResult;
 use super::Error;
 use super::Config;
 
-struct Worker {
-	remote: Remote,
-	session: Arc<Mutex<Session>>,
-	thread_handle: JoinHandle<()>,
-	is_terminating: Arc<RwLock<bool>>,
-}
-
-impl Worker {
-	pub fn new() -> Worker {
-		let (tx,rx) = sync_channel::<(Arc<Mutex<Session>>,Remote)>(0);
-		let is_terminating = Arc::new(RwLock::new(false));
-		let is_terminating_thread = is_terminating.clone();
-		let thread_handle = ThreadBuilder::new().spawn(
-			move || {
-				let mut lp = Core::new().expect("Unable to init downloader event-loop");
-				let session = Arc::new(Mutex::new(Session::new(lp.handle())));
-				let remote = lp.remote();
-				tx.send((session,remote)).expect("Unable to send session and remote");
-				loop {
-					{
-						let is_terminating = is_terminating_thread.read().expect("Unable to lock mutex");
-						if *is_terminating {
-							break;
-						}
-					}
-					lp.turn(None);
-				}
-			}
-		).expect(
-			"Unable to init woker thread"
-		);
-		let (session,remote) = rx.recv().expect("Unablet to get session and remote");
-		return Worker {
-			remote: remote,
-			session: session,
-			thread_handle: thread_handle,
-			is_terminating: is_terminating,
-		};
-	}
-
-	fn terminate(self) {
-		{
-			let mut is_terminating = self.is_terminating.write().expect("Unable to lock mutex");
-			*is_terminating = true;
-		}
-		self.remote.spawn(move |_handle:&Handle|{
-			future::ok::<(),()>(())
-		});
-		self.thread_handle.join().expect("Unable to stop thread");
-
-	}
-}
 
 /// Handle for working with network manager.
-#[derive(Debug)]
-pub struct NetworkManagerHandle<T: Send + 'static,E: Send + 'static> {
-	task_rx: SyncSender<Task<T,E>>,
-	result_tx: Receiver<RequestDownloaderResult<T,E>>,
-	manager_handle: Option< JoinHandle<()> >,
+pub struct NetworkManagerHandle<T,E> {
+	managers: Vec<NetworkManager>,
+	result_rx: Receiver<Result<Easy2<T>,Error<E>>>,
+	task_tx: SyncSender<Task<T,E>>,
+	collector: Option<JoinHandle<()>>,
 }
 
-impl <T: Send + 'static,E: Send + 'static>NetworkManagerHandle<T,E> {
+impl <T,E>NetworkManagerHandle<T,E> {
 	/// Aynchronous sending task to network manager.
 	pub fn send(&self,task: Task<T,E>) -> Result<(), SendError<Task<T,E>>> {
-		return self.task_rx.send(task);
+		return self.task_tx.send(task);
 	}
 
 	/// Returns copy of task sender.
 	pub fn get_sender(&self) -> SyncSender<Task<T,E>> {
-		return self.task_rx.clone();
+		return self.task_tx.clone();
 	}
 
 	/// Receives result with locking.
-	pub fn recv(&self) -> Result<RequestDownloaderResult<T,E>, RecvError> {
-		return self.result_tx.recv();
+	pub fn recv(&self) -> Result<Result<Easy2<T>,Error<E>>, RecvError> {
+		return self.result_rx.recv();
+	}
+
+	/// Returns count of active requests.
+	pub fn get_active_requests(&self) -> usize {
+		let mut result = 0usize;
+		for manager in self.managers.iter() {
+			result = result + manager.active_requests.load(
+				AtomicOrdering::Relaxed
+			);
+		}
+		return result;
 	}
 }
 
-impl <T: Send + 'static,E: Send + 'static>Drop for NetworkManagerHandle<T,E> {
-	/// When dropping we are waiting for termination of all threads.
-	fn drop(&mut self) {
-		self.task_rx.send(
-			generate_terminate_task()
+
+impl <T,E>Drop for NetworkManagerHandle<T,E> {
+    fn drop(&mut self) {
+    	self.task_tx.send(
+    		termination_task()
 		).expect(
 			"Unable to send termination task"
 		);
-		let mut manager_handle: Option<JoinHandle<()>> = None;
-		swap_variables(&mut manager_handle,&mut self.manager_handle);
-		manager_handle.unwrap().join().expect(
-			"Unable to wait download manager thread"
+    	let mut collector = None;
+    	swap_variable(&mut self.collector, &mut collector);
+    	collector.unwrap().join().expect(
+			"Unable to join thread"
 		);
-	}
+    	for manager in self.managers.drain(..) {
+    		manager.thread_handle.join(
+			).expect(
+				"Unable to join thread"
+			);
+    	}
+    }
 }
 
 /// Manager for processsing request.
-pub struct NetworkManager<T: Send + 'static,E: Send + 'static> {
-	remotes: Vec<Worker>,
-	result_tx: SyncSender<RequestDownloaderResult<T,E>>,
+pub struct NetworkManager {
+	active_requests: Arc<AtomicUsize>,
+	thread_handle: JoinHandle<()>,
 }
 
-impl <T: Send + 'static,E: Send + 'static>NetworkManager<T,E> {
-
-	fn terminate_workers(&mut self) {
-		for worker in self.remotes.drain(..) {
-			worker.terminate();
-		}
-	}
-
+impl NetworkManager {
 	/// Creates new network manager.
 	/// Produces threads that may panic when something is going wrong.
-	pub fn start(config: &Config) -> Result<NetworkManagerHandle<T,E>,Error<E>> {
-		let mut remotes = vec![];
-		let (result_tx,result_rx) = sync_channel::<RequestDownloaderResult<T,E>>(config.get_limit_result_channel());
+	pub fn start<T,E>(config: &Config) -> Result<NetworkManagerHandle<T,E>,Error<E>>  where E: Send + 'static, T: Send + 'static {
+		let (result_tx, result_rx) = sync_channel::<Result<Easy2<T>,Error<E>>>(config.get_limit_result_channel());
+		let mut managers = Vec::with_capacity(config.get_thread_count());
+		let mut task_tx_items = Vec::with_capacity(config.get_thread_count());
 		for _ in 0..config.get_thread_count() {
-			remotes.push(Worker::new());
-		}
-		let mut manager = NetworkManager {
-			remotes: remotes,
-			result_tx: result_tx.clone(),
-		};
-		let (tx,rx) = sync_channel::<Task<T,E>>(config.get_limit_task_channel());
-		let thread_handle = ThreadBuilder::new().spawn(
-			move || {
-				for worker in manager.remotes.iter().cycle() {
-					let task = rx.recv().expect("Unable to get task");
-					if is_terminate_task(&task) {
-						break;
-					}
-					let manager_result_tx = manager.result_tx.clone();
-					let worker_session = worker.session.clone();
-					worker.remote.spawn(move |_handle:&Handle|{
-						let request_result = RequestDownloader::new(task,&*worker_session.lock().unwrap(),manager_result_tx.clone());
-						let result = match request_result {
-							Ok(request) => {
-								RequestFuture::Process(request)
-							},
-							Err(request_error) => {
-								manager_result_tx.send(
-									Err( request_error )
-								).expect("Unable to send result");
-								RequestFuture::Ready
-							},
-						};
-						return result.map(|_|{()}).map_err(|_|{()});
-					});
-				}
-				manager.terminate_workers();
-			}
-		);
-		match thread_handle {
-			Ok(thread_handle) => {
-				return Ok(NetworkManagerHandle {
-					task_rx: tx,
-					result_tx: result_rx,
-					manager_handle: Some(thread_handle),
+			let active_requests = Arc::new(AtomicUsize::new(0));
+			let active_requests_thread = active_requests.clone();
+			#[allow(deprecated)]
+			let (task_tx, task_rx) = channel();
+			task_tx_items.push(task_tx.clone());
+			let thread_result_tx = result_tx.clone();
+			let worker_config = get_event_loop_config(config);
+			let handle = ThreadBuilder::new().spawn(move || {
+				let mut worker = EventLoop::new(
+					worker_config, task_rx, thread_result_tx
+				).expect("Unable to initialize worker");
+				worker.set_executing_requests_handler(move |active_requests|{
+					active_requests_thread.store(
+						active_requests as usize,
+						AtomicOrdering::Relaxed
+					);
 				});
-			},
-			Err(thread_error) => {
-				return Err(Error::ThreadStartError { error: thread_error });
-			}
+				worker.start().expect("Error in event loop");
+			}).map_err(|e|{
+				Error::IOError {error: e}
+			})?;
+			managers.push(NetworkManager {
+				active_requests: active_requests,
+				thread_handle: handle,
+			});
 		}
+		let (task_tx, task_rx) = sync_channel(config.get_limit_task_channel());
+		let collector = ThreadBuilder::new().spawn(move || {
+			for task_channel in task_tx_items.iter().cycle() {
+				let task = task_rx.recv().expect(
+					"Unable to receive data"
+				);
+				if is_terminate_task(&task) {
+					break;
+				}
+				#[allow(deprecated)]
+				task_channel.send(
+					task
+				).expect(
+					"Unable to send task"
+				);
+			}
+			for task_channel in task_tx_items.iter() {
+				#[allow(deprecated)]
+				task_channel.send(
+					termination_task()
+				).expect(
+					"Unable to send task"
+				);
+			}
+		}).map_err(|e|{
+			Error::IOError {error: e}
+		})?;
+		Ok(NetworkManagerHandle{
+			managers: managers,
+			result_rx: result_rx,
+			task_tx: task_tx,
+			collector: Some(collector),
+		})
 	}
 }

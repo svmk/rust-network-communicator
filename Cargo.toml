@@ -7,8 +7,6 @@ license = "MIT"
 documentation = "http://svmk.github.io/rust-network-communicator/0.1.0/network_communicator/index.html"
 
 [dependencies]
-tokio-curl="^0.1"
-tokio-core="^0.1"
+mio="0.6"
 quick-error = "1.2"
-futures="0.1"
 curl="0.4"

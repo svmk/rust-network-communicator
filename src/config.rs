@@ -1,7 +1,9 @@
+use event_loop::EventLoopConfig;
 /// Structure for configuration.
 #[derive(Debug,Clone)]
 pub struct Config {
 	thread_count: usize,
+	events_capacity: usize,
 	limit_result_channel_buffer: usize,
 	limit_task_channel_buffer: usize,
 }
@@ -14,6 +16,10 @@ quick_error! {
 		InvalidThreadCount {
 			description("Field thread_count shall be positive")
 		}
+		/// Events buffer length in event-loop. Must be greater than zero.
+		InvalidEventsCapacity {
+			description("Field events_capacity shall be positive")
+		}
 	}
 }
 
@@ -24,6 +30,7 @@ impl Config {
 	pub fn new(thread_count: usize) -> Result<Config,ConfigError> {
 		let result = Config {
 			thread_count: thread_count,
+			events_capacity: 128,
 			limit_result_channel_buffer: 0,
 			limit_task_channel_buffer: 0,
 		};
@@ -34,6 +41,9 @@ impl Config {
 	fn check_configuration(&self) -> Result<(),ConfigError> {
 		if self.thread_count <= 0 {
 			return Err(ConfigError::InvalidThreadCount);
+		}
+		if self.events_capacity == 0 {
+			return Err(ConfigError::InvalidEventsCapacity);
 		}
 		Ok(())
 	}
@@ -66,4 +76,20 @@ impl Config {
 	pub fn get_limit_task_channel(&self) -> usize {
 		return self.limit_task_channel_buffer;
 	}
+
+	/// Set events buffer length.
+	pub fn set_events_capacity(&mut self, value: usize) -> Result<&mut Self,ConfigError> {
+		self.events_capacity = value;
+		self.check_configuration()?;
+		Ok(self)
+	}
+
+	/// Returns events capacity.
+	pub fn get_events_capacity(&self) -> usize {
+		return self.events_capacity;
+	}
+}
+
+pub fn get_event_loop_config(config: &Config) -> EventLoopConfig {
+	return EventLoopConfig::new(config.events_capacity);
 }
